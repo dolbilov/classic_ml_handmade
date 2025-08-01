@@ -41,6 +41,10 @@ class MyLineReg:
                     log_text += f' | {self.metric} = {metric:.2f}'
                 print(log_text)
 
+        # getting best score in fitted model
+        y_pred = X @ self.weights
+        self.best_score = self.metric_function(y, y_pred)
+
     def predict(self, X_: pd.DataFrame) -> np.ndarray:
         X = X_.to_numpy()
         X = np.insert(X, 0, 1, axis=1)
