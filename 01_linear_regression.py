@@ -1,3 +1,4 @@
+import random
 from typing import Callable
 import numpy as np
 import pandas as pd
@@ -12,7 +13,9 @@ class MyLineReg:
         metric: str | None = None,
         reg: str | None = None,
         l1_coef: float = 0,
-        l2_coef: float = 0
+        l2_coef: float = 0,
+        sgd_sample: int | float | None = None,
+        random_state: int = 42
     ):
         self.n_iter = n_iter
         self.learning_rate = learning_rate
@@ -23,6 +26,10 @@ class MyLineReg:
         self.reg = reg
         self.l1_coef = l1_coef
         self.l2_coef = l2_coef
+        self.sgd_sample = sgd_sample
+        self.random_state = random_state
+
+        random.seed(random_state)
 
     def __repr__(self):
         return f'MyLineReg class: n_iter={self.n_iter}, learning_rate={self.learning_rate}'
@@ -52,17 +59,37 @@ class MyLineReg:
 
         return grad
 
+    def __get_sgd_sample_k(self, X: np.ndarray) -> int:
+        n = X.shape[0]
+
+        if self.sgd_sample is None:
+            return n
+
+        if isinstance(self.sgd_sample, int):
+            return min(n, self.sgd_sample)
+
+        if isinstance(self.sgd_sample, float):
+            return int(self.sgd_sample * n)
+
+        raise TypeError
+
     def fit(self, X_: pd.DataFrame, y_: pd.Series, verbose: bool | int = False) -> None:
         X = X_.to_numpy()
         y = y_.to_numpy()
+
+        sgd_sample_k = self.__get_sgd_sample_k(X)
 
         X = np.insert(X, 0, 1, axis=1)
         features_count = X.shape[1]
         self.weights = np.ones(features_count)
 
         for i in range(1, self.n_iter + 1):
+            sample_rows_idx = random.sample(range(X.shape[0]), sgd_sample_k)
+            X_batch = X[sample_rows_idx]
+
             y_pred = X @ self.weights
-            grad = self.__get_grad(X, y, y_pred)
+            y_pred_batch = X_batch @ self.weights
+            grad = self.__get_grad(X_batch, y[sample_rows_idx], y_pred_batch)
             lr = self.__get_learning_rate(i)
             self.weights -= lr * grad
 
