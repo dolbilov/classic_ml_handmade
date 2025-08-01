@@ -21,9 +21,8 @@ class RegressionMetrics:
 
     @staticmethod
     def mean_absolute_percentage_error(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-        n = len(y_true)
-        err = np.abs((y_true - y_pred) / y_pred).mean()
-        return 100 / n * err
+        err = np.abs((y_true - y_pred) / y_true).mean()
+        return 100 * err
 
     @staticmethod
     def get_metric_by_name(name: str):
