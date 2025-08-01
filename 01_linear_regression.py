@@ -49,5 +49,5 @@ class MyLineReg:
     def get_coef(self) -> np.ndarray:
         return self.weights[1:]
 
-    def get_best_score(self) -> float:
+    def get_best_score(self) -> float | None:
         return self.best_score
