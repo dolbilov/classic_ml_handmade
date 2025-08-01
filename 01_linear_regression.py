@@ -1,3 +1,4 @@
+from typing import Callable
 import numpy as np
 import pandas as pd
 from regression_metrics import RegressionMetrics
@@ -7,7 +8,7 @@ class MyLineReg:
     def __init__(
         self,
         n_iter: int = 100,
-        learning_rate: float = 0.1,
+        learning_rate: float | Callable[[int], float] = 0.1,
         metric: str | None = None,
         reg: str | None = None,
         l1_coef: float = 0,
@@ -25,6 +26,9 @@ class MyLineReg:
 
     def __repr__(self):
         return f'MyLineReg class: n_iter={self.n_iter}, learning_rate={self.learning_rate}'
+
+    def __get_learning_rate(self, iteration_number: int) -> float:
+        return self.learning_rate if isinstance(self.learning_rate, int | float) else self.learning_rate(iteration_number)
 
     def __get_loss(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         loss = np.square(y_true - y_pred).mean()
@@ -56,14 +60,15 @@ class MyLineReg:
         features_count = X.shape[1]
         self.weights = np.ones(features_count)
 
-        for i in range(self.n_iter):
+        for i in range(1, self.n_iter + 1):
             y_pred = X @ self.weights
             grad = self.__get_grad(X, y, y_pred)
-            self.weights -= self.learning_rate * grad
+            lr = self.__get_learning_rate(i)
+            self.weights -= lr * grad
 
-            if verbose and (i == 0 or (i + 1) % verbose == 0):
+            if verbose and (i == 1 or i % verbose == 0):
                 loss = self.__get_loss(y, y_pred)
-                log_text = f'[{i + 1}/{self.n_iter}] | loss = {loss:.2f}'
+                log_text = f'[{i}/{self.n_iter}] | loss = {loss:.2f}'
                 if self.metric_function is not None:
                     metric = self.metric_function(y, y_pred)
                     log_text += f' | {self.metric} = {metric:.2f}'
