@@ -43,7 +43,7 @@ class MyLineReg:
 
         # getting best score in fitted model
         y_pred = X @ self.weights
-        self.best_score = self.metric_function(y, y_pred)
+        self.best_score = self.metric_function(y, y_pred) if self.metric_function is not None else None
 
     def predict(self, X_: pd.DataFrame) -> np.ndarray:
         X = X_.to_numpy()
