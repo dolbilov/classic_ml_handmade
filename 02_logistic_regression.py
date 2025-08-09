@@ -6,44 +6,81 @@ from classification_metrics import ClassificationMetrics
 from NotFittedError import NotFittedError
 
 
-class MyLogReg:
+class LogisticRegression:
+    """Custom implementation of Logistic Regression with optional regularization and SGD mini-batching.
+
+    This implementation supports L1, L2, and ElasticNet regularization, different learning
+    rate strategies, stochastic gradient descent, and tracking various classification metrics.
+    """
+
+    EPSILON = 1e-15  # Small constant for numerical stability
+
     def __init__(
         self,
         n_iter: int = 10,
         learning_rate: float | Callable[[int], float] = 0.1,
         metric: Literal['accuracy', 'precision', 'recall', 'f1', 'roc_auc'] | None = None,
         reg: Literal['l1', 'l2', 'elasticnet'] | None = None,
-        l1_coef: float = 0,
-        l2_coef: float = 0,
+        l1_coef: float = 0.0,
+        l2_coef: float = 0.0,
         sgd_sample: int | float | None = None,
-        random_state: int = 42
+        random_state: int = 42,
+        threshold: float = 0.5,
+        verbose: int = 0
     ) -> None:
+        """Initialize the logistic regression model.
+
+        Args:
+            n_iter: Number of training iterations.
+            learning_rate: Constant learning rate or callable mapping iteration -> learning rate.
+            metric: Name of the evaluation metric to track during training.
+            reg: Regularization type ('l1', 'l2', 'elasticnet', or None).
+            l1_coef: L1 regularization strength.
+            l2_coef: L2 regularization strength.
+            sgd_sample: Mini-batch size (int for number of samples, float for fraction, None for full batch).
+            random_state: Random seed for reproducibility.
+            threshold: Probability threshold for binary classification.
+            verbose: Frequency (in iterations) of printing training progress. 0 to disable.
+        """
         self.n_iter = n_iter
         self.learning_rate = learning_rate
-        self.weights: np.ndarray | None = None
-        self.final_score: float | None = None
         self.metric = metric
-        self.metric_function: Callable[[np.ndarray, np.ndarray], float] | None = ClassificationMetrics.get_metric_by_name(metric) if metric else None
-        self.reg =reg
+        self.metric_function = (
+            ClassificationMetrics.get_metric_by_name(metric) if metric else None
+        )
+        self.reg = reg
         self.l1_coef = l1_coef
         self.l2_coef = l2_coef
         self.sgd_sample = sgd_sample
         self.random_state = random_state
+        self.threshold = threshold
+        self.verbose = verbose
+
+        self.weights: np.ndarray | None = None
+        self.final_score: float | None = None
 
         random.seed(random_state)
+        np.random.seed(random_state)
 
     def __repr__(self) -> str:
-        return f'MyLogReg class: n_iter={self.n_iter}, learning_rate={self.learning_rate}'
+        return (f'LogisticRegression(n_iter={self.n_iter}, learning_rate={self.learning_rate}, '
+                f'metric={self.metric}, reg={self.reg}, '
+                f'l1_coef={self.l1_coef}, l2_coef={self.l2_coef}, '
+                f'verbose={self.verbose})')
 
-    def __get_learning_rate(self, iteration_number: int) -> float:
-        return self.learning_rate if isinstance(self.learning_rate, int | float) else self.learning_rate(iteration_number)
+    def _sigmoid(self, z: np.ndarray) -> np.ndarray:
+        return 1 / (1 + np.exp(-z))
 
-    def __get_log_loss(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    def _get_learning_rate(self, iteration_number: int) -> float:
+        return (
+            self.learning_rate if isinstance(self.learning_rate, (int, float)) else self.learning_rate(iteration_number)
+        )
+
+    def _get_log_loss(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         if self.weights is None:
-            raise RuntimeError('weights is not initialized')
+            raise NotFittedError('Model is not fitted yet.')
 
-        eps = 1e-15
-        y_pred = np.clip(y_pred, eps, 1 - eps)
+        y_pred = np.clip(y_pred, self.EPSILON, 1 - self.EPSILON)
         loss = -(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred)).mean()
 
         if self.reg in ('l1', 'elasticnet'):
@@ -54,9 +91,9 @@ class MyLogReg:
 
         return loss
 
-    def __get_grad(self, X: np.ndarray, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+    def _get_grad(self, X: np.ndarray, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         if self.weights is None:
-                    raise RuntimeError('weights is not initialized')
+            raise NotFittedError('Model is not fitted yet.')
 
         grad = (y_pred - y_true) @ X / X.shape[0]
 
@@ -68,96 +105,126 @@ class MyLogReg:
 
         return grad
 
-    def __get_sgd_sample_k(self, X: np.ndarray) -> int:
-        n = X.shape[0]
-
+    def _get_sgd_sample_k(self, n_samples: int) -> int:
         if self.sgd_sample is None:
-            return n
-
+            return n_samples
         if isinstance(self.sgd_sample, int):
-            return min(n, self.sgd_sample)
-
+            return min(n_samples, self.sgd_sample)
         if isinstance(self.sgd_sample, float):
-            return int(self.sgd_sample * n)
+            return int(self.sgd_sample * n_samples)
+        raise TypeError('sgd_sample must be int, float, or None.')
 
-        raise TypeError
+    def fit(self, X_: pd.DataFrame | np.ndarray, y_: pd.Series | np.ndarray) -> None:
+        """Train the logistic regression model.
 
-    def fit(self, X_: pd.DataFrame, y_: pd.Series, verbose: int = 0) -> None:
-        X = X_.to_numpy()
-        y = y_.to_numpy()
+        Args:
+            X_: Feature matrix of shape (n_samples, n_features).
+            y_: Target vector of shape (n_samples,).
 
-        sgd_sample_k = self.__get_sgd_sample_k(X)
+        Raises:
+            ValueError: If input shapes are inconsistent.
+        """
+        X = np.asarray(X_, dtype=float)
+        y = np.asarray(y_, dtype=float)
 
-        X = np.insert(X, 0, 1, axis=1)
-        features_count = X.shape[1]
-        self.weights = np.ones(features_count)
+        if X.shape[0] != y.shape[0]:
+            raise ValueError('Number of samples in X and y must match.')
+
+        sgd_sample_k = self._get_sgd_sample_k(X.shape[0])
+        X = np.insert(X, 0, 1, axis=1)  # bias term
+        self.weights = np.zeros(X.shape[1])
 
         for i in range(1, self.n_iter + 1):
-            sample_rows_idx = random.sample(range(X.shape[0]), sgd_sample_k)
-            X_batch = X[sample_rows_idx]
+            batch_idx = np.random.choice(X.shape[0], sgd_sample_k, replace=False)
+            X_batch, y_batch = X[batch_idx], y[batch_idx]
 
-            y_pred_batch = 1 / (1 + np.exp(-X_batch @ self.weights))
-            grad = self.__get_grad(X_batch, y[sample_rows_idx], y_pred_batch)
-            lr = self.__get_learning_rate(i)
+            y_pred_batch = self._sigmoid(X_batch @ self.weights)
+            grad = self._get_grad(X_batch, y_batch, y_pred_batch)
+            lr = self._get_learning_rate(i)
+
             self.weights -= lr * grad
 
-            if verbose and (i == 1 or i % verbose == 0):
-                y_pred = 1 / (1 + np.exp(-X @ self.weights))
-                loss = self.__get_log_loss(y, y_pred)
-                log_text = f'[{i}/{self.n_iter}] | loss = {loss:.2f}'
-                if self.metric_function is not None:
-                    preds = y_pred if self.metric == 'roc_auc' else (y_pred > 0.5).astype(int)
-                    metric = self.metric_function(y, preds)
-                    log_text += f' | {self.metric} = {metric:.2f}'
+            if self.verbose and (i == 1 or i % self.verbose == 0):
+                y_pred_full = self._sigmoid(X @ self.weights)
+                loss = self._get_log_loss(y, y_pred_full)
+                log_text = f'[{i}/{self.n_iter}] | loss = {loss:.4f}'
+                if self.metric_function:
+                    preds = y_pred_full if self.metric == 'roc_auc' else (y_pred_full > self.threshold).astype(int)
+                    metric_val = self.metric_function(y, preds)
+                    log_text += f' | {self.metric} = {metric_val:.4f}'
                 print(log_text)
 
         if self.metric_function:
-            y_pred = 1 / (1 + np.exp(-X @ self.weights))
-            preds = y_pred if self.metric == 'roc_auc' else (y_pred > 0.5).astype(int)
+            y_pred_full = self._sigmoid(X @ self.weights)
+            preds = y_pred_full if self.metric == 'roc_auc' else (y_pred_full > self.threshold).astype(int)
             self.final_score = self.metric_function(y, preds)
 
-    def predict(self, X_: pd.DataFrame) -> np.ndarray:
-        probs = self.predict_proba(X_)
-        return (probs > 0.5).astype(int)
+    def predict_proba(self, X_: pd.DataFrame | np.ndarray) -> np.ndarray:
+        """Predict class probabilities for input samples.
 
-    def predict_proba(self, X_: pd.DataFrame) -> np.ndarray:
+        Args:
+            X_: Feature matrix of shape (n_samples, n_features).
+
+        Returns:
+            np.ndarray: Array of probabilities for the positive class.
+
+        Raises:
+            NotFittedError: If model is not fitted yet.
+        """
         if self.weights is None:
-            raise NotFittedError
+            raise NotFittedError('Model is not fitted yet.')
 
-        X = X_.to_numpy()
+        X = np.asarray(X_, dtype=float)
         X = np.insert(X, 0, 1, axis=1)
-        return 1 / (1 + np.exp(-X @ self.weights))
+        return self._sigmoid(X @ self.weights)
+
+    def predict(self, X_: pd.DataFrame | np.ndarray) -> np.ndarray:
+        """Predict binary class labels for input samples.
+
+        Args:
+            X_: Feature matrix of shape (n_samples, n_features).
+
+        Returns:
+            np.ndarray: Predicted class labels (0 or 1).
+        """
+        return (self.predict_proba(X_) > self.threshold).astype(int)
 
     def get_coef(self) -> np.ndarray:
-        """
-        Returns the learned model coefficients (excluding the bias term).
+        """Get the model coefficients (excluding bias term).
 
         Returns:
-            np.ndarray: Model coefficients of shape (n_features,).
+            np.ndarray: Coefficients of shape (n_features,).
 
         Raises:
-            NotFittedError: If the model has not been fitted yet.
+            NotFittedError: If model is not fitted yet.
         """
         if self.weights is None:
-            raise NotFittedError
-
+            raise NotFittedError('Model is not fitted yet.')
         return self.weights[1:]
 
-    def get_best_score(self) -> float:
-        """
-        Returns the final evaluation score based on the selected metric after training.
+    def get_final_score(self) -> float:
+        """Get the final evaluation score after training.
 
         Returns:
-            float: Final score computed using the selected metric.
+            float: Final score based on the chosen metric.
 
         Raises:
-            NotFittedError: If the model has not been fitted yet.
-            RuntimeError: If no evaluation metric was selected during initialization.
+            NotFittedError: If model is not fitted yet.
+            RuntimeError: If no metric was specified during initialization.
         """
         if self.weights is None:
-            raise NotFittedError
-
+            raise NotFittedError('Model is not fitted yet.')
         if self.final_score is None:
-            raise RuntimeError('Metric is not selected')
-
+            raise RuntimeError('Metric was not selected during initialization.')
         return self.final_score
+
+
+if __name__ == '__main__':
+    X_demo = pd.DataFrame(np.random.randn(100, 3), columns=['f1', 'f2', 'f3'])
+    y_demo = pd.Series(np.random.randint(0, 2, size=100))
+
+    model = LogisticRegression(n_iter=50, learning_rate=0.1, metric='accuracy', verbose=10)
+    model.fit(X_demo, y_demo)
+
+    print('Coefficients:', model.get_coef())
+    print('Final score:', model.get_final_score())
