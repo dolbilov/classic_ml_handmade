@@ -68,24 +68,44 @@ class MyLogReg:
 
         return grad
 
+    def __get_sgd_sample_k(self, X: np.ndarray) -> int:
+        n = X.shape[0]
+
+        if self.sgd_sample is None:
+            return n
+
+        if isinstance(self.sgd_sample, int):
+            return min(n, self.sgd_sample)
+
+        if isinstance(self.sgd_sample, float):
+            return int(self.sgd_sample * n)
+
+        raise TypeError
+
     def fit(self, X_: pd.DataFrame, y_: pd.Series, verbose: int = 0) -> None:
         X = X_.to_numpy()
         y = y_.to_numpy()
+
+        sgd_sample_k = self.__get_sgd_sample_k(X)
 
         X = np.insert(X, 0, 1, axis=1)
         features_count = X.shape[1]
         self.weights = np.ones(features_count)
 
         for i in range(1, self.n_iter + 1):
-            y_pred = 1 / (1 + np.exp(-X @ self.weights))
-            log_loss = self.__get_log_loss(y, y_pred)
-            grad = self.__get_grad(X, y, y_pred)
+            sample_rows_idx = random.sample(range(X.shape[0]), sgd_sample_k)
+            X_batch = X[sample_rows_idx]
+
+            y_pred_batch = 1 / (1 + np.exp(-X_batch @ self.weights))
+            grad = self.__get_grad(X_batch, y[sample_rows_idx], y_pred_batch)
             lr = self.__get_learning_rate(i)
             self.weights -= lr * grad
 
             if verbose and (i == 1 or i % verbose == 0):
-                log_text = f'[{i}/{self.n_iter}] | loss = {log_loss:.2f}'
-                if self.metric_function:
+                y_pred = 1 / (1 + np.exp(-X @ self.weights))
+                loss = self.__get_log_loss(y, y_pred)
+                log_text = f'[{i}/{self.n_iter}] | loss = {loss:.2f}'
+                if self.metric_function is not None:
                     preds = y_pred if self.metric == 'roc_auc' else (y_pred > 0.5).astype(int)
                     metric = self.metric_function(y, preds)
                     log_text += f' | {self.metric} = {metric:.2f}'
