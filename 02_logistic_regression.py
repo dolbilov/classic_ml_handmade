@@ -1,37 +1,72 @@
+import random
 from typing import Literal, Callable
 import numpy as np
 import pandas as pd
-from NotFittedError import NotFittedError
 from classification_metrics import ClassificationMetrics
+from NotFittedError import NotFittedError
 
 
 class MyLogReg:
     def __init__(
         self,
         n_iter: int = 10,
-        learning_rate: float = 0.1,
+        learning_rate: float | Callable[[int], float] = 0.1,
         metric: Literal['accuracy', 'precision', 'recall', 'f1', 'roc_auc'] | None = None,
         reg: Literal['l1', 'l2', 'elasticnet'] | None = None,
         l1_coef: float = 0,
-        l2_coef: float = 0
+        l2_coef: float = 0,
+        sgd_sample: int | float | None = None,
+        random_state: int = 42
     ) -> None:
         self.n_iter = n_iter
         self.learning_rate = learning_rate
         self.weights: np.ndarray | None = None
+        self.final_score: float | None = None
         self.metric = metric
         self.metric_function: Callable[[np.ndarray, np.ndarray], float] | None = ClassificationMetrics.get_metric_by_name(metric) if metric else None
-        self.final_score: float | None = None
         self.reg =reg
         self.l1_coef = l1_coef
         self.l2_coef = l2_coef
+        self.sgd_sample = sgd_sample
+        self.random_state = random_state
+
+        random.seed(random_state)
 
     def __repr__(self) -> str:
         return f'MyLogReg class: n_iter={self.n_iter}, learning_rate={self.learning_rate}'
 
+    def __get_learning_rate(self, iteration_number: int) -> float:
+        return self.learning_rate if isinstance(self.learning_rate, int | float) else self.learning_rate(iteration_number)
+
     def __get_log_loss(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        if self.weights is None:
+            raise RuntimeError('weights is not initialized')
+
         eps = 1e-15
         y_pred = np.clip(y_pred, eps, 1 - eps)
-        return -(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred)).mean()
+        loss = -(y_true * np.log(y_pred) + (1 - y_true) * np.log(1 - y_pred)).mean()
+
+        if self.reg in ('l1', 'elasticnet'):
+            loss += self.l1_coef * np.abs(self.weights).sum()
+
+        if self.reg in ('l2', 'elasticnet'):
+            loss += self.l2_coef * np.square(self.weights).sum()
+
+        return loss
+
+    def __get_grad(self, X: np.ndarray, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
+        if self.weights is None:
+                    raise RuntimeError('weights is not initialized')
+
+        grad = (y_pred - y_true) @ X / X.shape[0]
+
+        if self.reg in ('l1', 'elasticnet'):
+            grad += self.l1_coef * np.sign(self.weights)
+
+        if self.reg in ('l2', 'elasticnet'):
+            grad += self.l2_coef * 2 * self.weights
+
+        return grad
 
     def fit(self, X_: pd.DataFrame, y_: pd.Series, verbose: int = 0) -> None:
         X = X_.to_numpy()
@@ -44,8 +79,9 @@ class MyLogReg:
         for i in range(1, self.n_iter + 1):
             y_pred = 1 / (1 + np.exp(-X @ self.weights))
             log_loss = self.__get_log_loss(y, y_pred)
-            grad = (y_pred - y) @ X / X.shape[0]
-            self.weights -= self.learning_rate * grad
+            grad = self.__get_grad(X, y, y_pred)
+            lr = self.__get_learning_rate(i)
+            self.weights -= lr * grad
 
             if verbose and (i == 1 or i % verbose == 0):
                 log_text = f'[{i}/{self.n_iter}] | loss = {log_loss:.2f}'
