@@ -3,7 +3,7 @@ from typing import Callable, Literal
 import numpy as np
 import pandas as pd
 from regression_metrics import RegressionMetrics
-from NotFittedError import NotFittedError
+from exceptions import NotFittedError
 
 
 class LinearRegression:

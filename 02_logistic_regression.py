@@ -3,7 +3,7 @@ from typing import Literal, Callable
 import numpy as np
 import pandas as pd
 from classification_metrics import ClassificationMetrics
-from NotFittedError import NotFittedError
+from exceptions import NotFittedError
 
 
 class LogisticRegression:
