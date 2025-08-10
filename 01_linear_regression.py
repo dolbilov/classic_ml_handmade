@@ -218,3 +218,14 @@ class LinearRegression:
             raise RuntimeError('Metric was not selected during initialization.')
 
         return self.final_score
+
+
+if __name__ == '__main__':
+    X_demo = pd.DataFrame(np.random.randn(100, 3), columns=['f1', 'f2', 'f3'])
+    y_demo = pd.Series(np.random.rand(100))
+
+    model = LinearRegression(n_iter=50, learning_rate=0.1, metric='mse', verbose=10)
+    model.fit(X_demo, y_demo)
+
+    print('Coefficients:', model.get_coef())
+    print('Final score:', model.get_final_score())
